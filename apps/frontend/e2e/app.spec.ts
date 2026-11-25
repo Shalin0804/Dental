@@ -9,7 +9,7 @@ function trackErrors(page: Page) {
   return errors;
 }
 
-async function login(page: Page, email: string, password = "Demo@12345") {
+async function login(page: Page, email: string, password = process.env.E2E_DEMO_PASSWORD ?? "Demo@12345") {
   await page.goto("/login");
   await page.getByLabel("Email").fill(email);
   await page.getByLabel("Password").fill(password);

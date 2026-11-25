@@ -38,7 +38,7 @@ services:
         value: info
       # First super admin (created on first boot; change the password after logging in)
       - key: SEED_ADMIN_EMAIL
-        value: admin@smiledental.example
+        value: admin@gmail.com
       - key: SEED_ADMIN_PASSWORD
         sync: false
       # Demo doctors / receptionist / patient for a demo deployment. Set SEED_DEMO=false for a real hospital.

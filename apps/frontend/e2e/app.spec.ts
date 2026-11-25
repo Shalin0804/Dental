@@ -70,7 +70,7 @@ test("receptionist: walk-in booking, check-in and queue", async ({ page }) => {
 });
 
 const ROLES: [string, string, string | undefined][] = [
-  ["admin", "admin@smiledental.example", "Admin@12345"],
+  ["admin", "admin@gmail.com", "Admin@123456"],
   ["reception", "reception@smiledental.example", undefined],
   ["doctor", "dr.arjun@smiledental.example", undefined],
   ["patient", "patient@smiledental.example", undefined],

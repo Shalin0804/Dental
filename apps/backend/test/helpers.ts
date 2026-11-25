@@ -8,7 +8,7 @@ export const app = createApp(mountModules);
 export const http = () => request(app);
 export { prisma };
 
-export async function login(email: string, password = email.startsWith("admin@") ? "Admin@12345" : "Demo@12345") {
+export async function login(email: string, password = email.startsWith("admin@") ? "Admin@123456" : "Demo@12345") {
   const r = await http().post("/api/auth/login").send({ email, password });
   if (r.status !== 200) throw new Error(`login failed for ${email}: ${JSON.stringify(r.body)}`);
   return r.body.data.accessToken as string;

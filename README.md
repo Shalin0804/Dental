@@ -29,7 +29,7 @@ npm run dev:web                             # http://localhost:5173
 
 | Panel | URL | Email | Password |
 |---|---|---|---|
-| Super admin | /admin | admin@smiledental.example | Admin@12345 |
+| Super admin | /admin | admin@gmail.com | Admin@123456 |
 | Admin | /admin | manager@smiledental.example | Demo@12345 |
 | Receptionist | /reception | reception@smiledental.example | Demo@12345 |
 | Doctor | /doctor | dr.arjun@smiledental.example (also dr.kavya, dr.rohan, dr.sneha) | Demo@12345 |

@@ -153,8 +153,8 @@ async function main() {
   }
 
   // Super admin
-  const adminEmail = process.env.SEED_ADMIN_EMAIL ?? (isProd ? undefined : "admin@smiledental.example");
-  const adminPassword = process.env.SEED_ADMIN_PASSWORD ?? (isProd ? undefined : "Admin@12345");
+  const adminEmail = process.env.SEED_ADMIN_EMAIL ?? (isProd ? undefined : "admin@gmail.com");
+  const adminPassword = process.env.SEED_ADMIN_PASSWORD ?? (isProd ? undefined : "Admin@123456");
   if (!adminEmail || !adminPassword) throw new Error("SEED_ADMIN_EMAIL and SEED_ADMIN_PASSWORD are required in production");
   await prisma.user.upsert({
     where: { email: adminEmail },

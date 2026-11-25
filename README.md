@@ -11,7 +11,7 @@ Full-stack dental hospital management & appointment booking platform — *Your S
 - **Notifications** — WhatsApp templates, email (Resend), SMS; outbox with retries, delivery log, in-app inbox; reminders and follow-ups.
 - **Security** — argon2id, 15-min JWT + rotating refresh tokens with reuse detection, account lockout, RBAC with editable permissions, ownership checks, rate limits, CSP/HSTS, CSRF header, audit logs on every sensitive action. API docs at `/api/docs`.
 
-Docs: [`docs/PLAN.md`](docs/PLAN.md) · [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) · [`docs/INTEGRATIONS.md`](docs/INTEGRATIONS.md) · [`docs/SECURITY.md`](docs/SECURITY.md) · [`AGENTS.md`](AGENTS.md)
+Docs: [`docs/PLAN.md`](docs/PLAN.md) · [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) · [`docs/INTEGRATIONS.md`](docs/INTEGRATIONS.md) · [`docs/SECURITY.md`](docs/SECURITY.md) · [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) · [`AGENTS.md`](AGENTS.md)
 
 ## Quick start (local)
 

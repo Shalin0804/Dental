@@ -1,0 +1,13 @@
+node_modules
+dist
+.env
+.env.local
+*.log
+coverage
+playwright-report
+test-results
+apps/backend/uploads
+apps/backend/src/generated
+*.tmp.mjs
+api.log
+web.log

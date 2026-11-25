@@ -1,0 +1,25 @@
+{
+  "name": "smile-dental-care",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspaces --if-present",
+    "dev:web": "npm run dev -w @sdc/frontend",
+    "dev:api": "npm run dev -w @sdc/backend",
+    "build": "npm run build -w @sdc/shared && npm run build -w @sdc/backend && npm run build -w @sdc/frontend",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "allowScripts": {
+    "prisma@7.10.1": true,
+    "@prisma/engines@7.10.1": true,
+    "esbuild@0.28.2": true,
+    "argon2@0.45.2": true
+  }
+}

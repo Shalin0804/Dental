@@ -1,0 +1,7 @@
+User-agent: *
+Allow: /
+Disallow: /admin
+Disallow: /reception
+Disallow: /doctor
+Disallow: /patient
+Sitemap: https://smiledentalcare.example/sitemap.xml

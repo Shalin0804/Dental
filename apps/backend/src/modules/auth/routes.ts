@@ -18,8 +18,8 @@ const LOCK_MINUTES = 15;
 
 const cookieOpts = (): CookieOptions => ({
   httpOnly: true,
-  secure: isProd,
-  sameSite: isProd ? "none" : "lax", // frontend and API live on different sites in production
+  secure: isProd || env.COOKIE_SAMESITE === "none",
+  sameSite: env.COOKIE_SAMESITE,
   path: "/api/auth",
   maxAge: env.REFRESH_TOKEN_DAYS * 86_400_000,
 });

@@ -2,12 +2,13 @@ import { createServer } from "node:http";
 import { createApp } from "./app.js";
 import { prisma } from "./config/db.js";
 import { env } from "./config/env.js";
+import { docsRouter } from "./modules/docs.js";
 import { mountModules } from "./modules/index.js";
 import { startJobs } from "./services/jobs.js";
 import { initRealtime } from "./services/realtime.js";
 import { logger } from "./utils/logger.js";
 
-const app = createApp(mountModules);
+const app = createApp((api) => { mountModules(api); api.use("/docs", docsRouter); });
 const server = createServer(app);
 initRealtime(server);
 const timers = startJobs();

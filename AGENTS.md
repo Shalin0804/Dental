@@ -12,7 +12,8 @@ When calling the claude-code MCP tool, always pass absolute paths under this pro
 - `docker compose up -d` — database
 - `npm run db:migrate -w @sdc/backend` / `npm run db:seed -w @sdc/backend`
 - `npm run dev:api` (port 4000) and `npm run dev:web` (port 5173, proxies `/api`)
-- `npm run typecheck`, `npm test`
+- `npm run typecheck`, `npm test -w @sdc/backend`, `npm run e2e -w @sdc/frontend`
+- Production: `npm run build` then `npm run start:render -w @sdc/backend` (migrate + seed + serve API and `STATIC_DIR` frontend). Render Blueprint: `render.yaml`. Swagger: `/api/docs`.
 
 ## Rules
 - Money is integer **paise**. Timestamps are UTC `timestamptz`; schedule times are minutes-from-midnight in `HospitalSettings.timezone` (default Asia/Kolkata).

@@ -1,0 +1,71 @@
+# Render Blueprint — one-click deploy: https://render.com/deploy?repo=https://github.com/Shalin0804/Dental
+# One web service serves both the API (/api) and the built React app; one managed PostgreSQL.
+# Values marked `sync: false` are entered in the Render dashboard during setup (never committed).
+
+databases:
+  - name: smile-dental-db
+    plan: free            # free DBs expire after 30 days — upgrade to basic-256mb for real use
+    databaseName: smile_dental
+    user: smile
+    postgresMajorVersion: "17"
+
+services:
+  - type: web
+    name: smile-dental-care
+    runtime: node
+    plan: free            # free instances sleep after 15 min idle; use starter+ for production
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm run start:render -w @sdc/backend
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: smile-dental-db
+          property: connectionString
+      - key: JWT_ACCESS_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      - key: STATIC_DIR
+        value: ../frontend/dist
+      - key: COOKIE_SAMESITE
+        value: lax
+      - key: LOG_LEVEL
+        value: info
+      # First super admin (created on first boot; change the password after logging in)
+      - key: SEED_ADMIN_EMAIL
+        value: admin@smiledental.example
+      - key: SEED_ADMIN_PASSWORD
+        sync: false
+      # Demo doctors / receptionist / patient for a demo deployment. Set SEED_DEMO=false for a real hospital.
+      - key: SEED_DEMO
+        value: "true"
+      - key: ALLOW_DEMO_SEED
+        value: "true"
+      - key: SEED_DEMO_PASSWORD
+        sync: false
+      # Optional integrations — leave empty until you have credentials (deliveries are logged as SKIPPED)
+      - key: RAZORPAY_KEY_ID
+        sync: false
+      - key: RAZORPAY_KEY_SECRET
+        sync: false
+      - key: RAZORPAY_WEBHOOK_SECRET
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+      - key: WHATSAPP_TOKEN
+        sync: false
+      - key: WHATSAPP_PHONE_NUMBER_ID
+        sync: false
+      - key: SMS_PROVIDER_URL
+        sync: false
+      - key: SMS_API_KEY
+        sync: false
+      - key: SMS_SENDER_ID
+        sync: false

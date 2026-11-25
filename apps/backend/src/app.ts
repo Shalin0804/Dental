@@ -1,5 +1,6 @@
 import cookieParser from "cookie-parser";
 import cors from "cors";
+import path from "node:path";
 import express, { Router } from "express";
 import rateLimit from "express-rate-limit";
 import helmet from "helmet";
@@ -18,7 +19,25 @@ export function createApp(mount: (api: Router) => void = () => {}) {
   app.set("trust proxy", 1);
   app.disable("x-powered-by");
 
-  app.use(helmet({ crossOriginResourcePolicy: { policy: "same-site" } }));
+  app.use(helmet({
+    crossOriginResourcePolicy: { policy: "same-site" },
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'", "https://checkout.razorpay.com"],
+        styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+        fontSrc: ["'self'", "https://fonts.gstatic.com"],
+        imgSrc: ["'self'", "data:", "blob:", "https:"],
+        connectSrc: ["'self'", "wss:", "https://api.razorpay.com", "https://lumberjack.razorpay.com"],
+        frameSrc: ["https://api.razorpay.com", "https://checkout.razorpay.com", "https://www.google.com", "blob:"],
+        objectSrc: ["'none'"],
+        baseUri: ["'self'"],
+        formAction: ["'self'"],
+        frameAncestors: ["'self'"],
+        upgradeInsecureRequests: null, // HTTPS is enforced by the host + HSTS
+      },
+    },
+  }));
   app.use(cors({ origin: allowedOrigins, credentials: true, allowedHeaders: ["Content-Type", "Authorization", "x-sdc-csrf"] }));
   app.use(pinoHttp({ logger, autoLogging: { ignore: (req) => req.url === "/api/health" } }));
 
@@ -36,6 +55,17 @@ export function createApp(mount: (api: Router) => void = () => {}) {
 
   app.get("/sitemap.xml", sitemap);
   app.use("/api", api);
+
+  if (env.STATIC_DIR) {
+    const dir = path.resolve(env.STATIC_DIR);
+    app.use(express.static(dir, { index: false, maxAge: "1y", immutable: true, setHeaders: (res, file) => { if (!file.includes(`${path.sep}assets${path.sep}`)) res.setHeader("Cache-Control", "no-cache"); } }));
+    // SPA fallback for client-side routes.
+    app.use((req, res, next) => {
+      if ((req.method !== "GET" && req.method !== "HEAD") || req.path.startsWith("/api") || !req.accepts("html")) return next();
+      res.setHeader("Cache-Control", "no-cache");
+      res.sendFile(path.join(dir, "index.html"));
+    });
+  }
   app.use(notFoundHandler);
   app.use(errorHandler);
   return app;

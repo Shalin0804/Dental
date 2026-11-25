@@ -4,7 +4,8 @@
  * Demo doctors/staff/patients/reviews are only created when SEED_DEMO=true (never in production).
  *
  *   SEED_ADMIN_EMAIL / SEED_ADMIN_PASSWORD  — required in production
- *   SEED_DEMO=true                          — adds demo users (password: SEED_DEMO_PASSWORD or "Demo@12345")
+ *   SEED_DEMO=true                          — adds demo users (password: SEED_DEMO_PASSWORD or "Demo@12345" in dev)
+ *   ALLOW_DEMO_SEED=true                    — permits the demo seed when NODE_ENV=production (demo deployments only)
  */
 import argon2 from "argon2";
 import { PrismaPg } from "@prisma/adapter-pg";
@@ -161,7 +162,11 @@ async function main() {
     create: { email: adminEmail, fullName: "Super Admin", passwordHash: await argon2.hash(adminPassword, { type: argon2.argon2id }), roleId: roles.SUPER_ADMIN },
   });
 
-  if (process.env.SEED_DEMO === "true" && !isProd) await seedDemo(roles);
+  // Demo accounts: always allowed in development; in production only with an explicit opt-in and a supplied password.
+  if (process.env.SEED_DEMO === "true" && (!isProd || process.env.ALLOW_DEMO_SEED === "true")) {
+    if (isProd && !process.env.SEED_DEMO_PASSWORD) throw new Error("SEED_DEMO_PASSWORD is required for a production demo seed");
+    await seedDemo(roles);
+  }
   console.log("Seed complete.");
 }
 

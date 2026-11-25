@@ -8,6 +8,7 @@ export class ApiRequestError extends Error {
 
 let accessToken: string | null = null;
 export const setAccessToken = (t: string | null) => { accessToken = t; };
+export const getAccessToken = () => accessToken;
 
 let refreshing: Promise<boolean> | null = null;
 /** Single-flight refresh: concurrent 401s share one /auth/refresh call. */

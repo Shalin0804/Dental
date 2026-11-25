@@ -9,6 +9,8 @@ export interface SessionUser {
   fullName: string;
   role: RoleName;
   permissions: string[];
+  patientId: string | null;
+  doctorId: string | null;
 }
 
 interface AuthCtx {

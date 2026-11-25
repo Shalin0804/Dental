@@ -10,6 +10,9 @@ export const fmtDateTime = (iso: string | Date, tz?: string) => `${fmtDate(iso, 
 /** YYYY-MM-DD for "today" in the hospital timezone. */
 export const todayLocal = (tz = HOSPITAL_TZ) => new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(new Date());
 
+/** YYYY-MM-DD of an instant in the hospital timezone. */
+export const localDay = (iso: string | Date, tz = HOSPITAL_TZ) => new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(new Date(iso));
+
 /** Day label for a YYYY-MM-DD date (no timezone shift). */
 export const dayParts = (date: string) => {
   const d = new Date(`${date}T12:00:00Z`);

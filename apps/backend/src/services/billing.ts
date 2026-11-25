@@ -1,7 +1,10 @@
 import { prisma, type InvoiceStatus, type Tx } from "../config/db.js";
 import { logger } from "../utils/logger.js";
 import { nextSeq } from "../utils/sequence.js";
-import { getSettings } from "./availability.js";
+import { localDate } from "../utils/time.js";
+import { assertSlotAvailable, getSettings } from "./availability.js";
+
+export const HOLD_EXPIRED = "Online payment not completed in time";
 import { notifyPatient } from "./notify.js";
 
 export interface LineInput { description: string; quantity: number; unitPricePaise: number; treatmentId?: string | null }
@@ -37,6 +40,9 @@ export async function createInvoice(tx: Tx, input: { patientId: string; appointm
   });
 }
 
+/** Serialises all money movements on one invoice / payment for the transaction's duration. */
+export const lockKey = (tx: Tx, key: string) => tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${key}))`;
+
 /** Re-derives paid/refunded totals and status from payment rows. */
 export async function syncInvoice(tx: Tx, invoiceId: string) {
   const inv = await tx.invoice.findUniqueOrThrow({ where: { id: invoiceId }, include: { payments: { include: { refunds: true } } } });
@@ -58,7 +64,14 @@ export async function captureRazorpay(orderId: string, paymentId: string) {
     if (!p) return { status: "unknown" as const };
     if (p.status === "CAPTURED" || p.status === "REFUNDED" || p.status === "PARTIALLY_REFUNDED") return { status: "already" as const, payment: p };
 
-    await tx.payment.update({ where: { id: p.id }, data: { status: "CAPTURED", razorpayPaymentId: paymentId, paidAt: new Date(), failureReason: null } });
+    let needsRefund = false;
+    if (p.invoiceId) {
+      // Invoice payment: refuse to over-collect (a second order paid, or invoice voided meanwhile).
+      await lockKey(tx, `invoice:${p.invoiceId}`);
+      const inv = await tx.invoice.findUniqueOrThrow({ where: { id: p.invoiceId } });
+      if (inv.status === "VOID" || inv.totalPaise - inv.paidPaise + inv.refundedPaise < p.amountPaise) needsRefund = true;
+    }
+    await tx.payment.update({ where: { id: p.id }, data: { status: "CAPTURED", razorpayPaymentId: paymentId, paidAt: new Date(), failureReason: needsRefund ? "Captured on an invoice that was already settled or void — refund required" : null } });
     const a = p.appointment;
     let invoiceId = p.invoiceId;
     if (a && !invoiceId) {
@@ -68,18 +81,23 @@ export async function captureRazorpay(orderId: string, paymentId: string) {
     }
     const invoice = invoiceId ? await syncInvoice(tx, invoiceId) : null;
 
-    let needsRefund = false;
     if (a && a.status === "PENDING") {
       await tx.appointment.update({ where: { id: a.id }, data: { status: "CONFIRMED" } });
       await tx.appointmentStatusHistory.create({ data: { appointmentId: a.id, fromStatus: "PENDING", toStatus: "CONFIRMED", note: "Online payment verified" } });
     } else if (a && a.status === "CANCELLED") {
-      // Hold expired before payment landed. Re-activate only if the slot is still free.
-      const clash = await tx.appointment.count({ where: { doctorId: a.doctorId, id: { not: a.id }, status: { notIn: ["CANCELLED", "NO_SHOW"] }, startAt: { lt: a.endAt }, endAt: { gt: a.startAt } } });
-      if (clash) needsRefund = true;
-      else {
-        await tx.appointment.update({ where: { id: a.id }, data: { status: "CONFIRMED", cancelReason: null } });
-        await tx.appointmentStatusHistory.create({ data: { appointmentId: a.id, fromStatus: "CANCELLED", toStatus: "CONFIRMED", note: "Late payment received; slot still free" } });
+      // Only a payment-hold expiry may be reversed, only for a future slot, and only if it is still bookable.
+      let revived = false;
+      if (a.cancelReason === HOLD_EXPIRED && a.startAt > new Date()) {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${a.doctorId}))`;
+        const s = await getSettings(tx);
+        try {
+          await assertSlotAvailable({ doctorId: a.doctorId, treatmentId: a.treatmentId, date: localDate(a.startAt, s.timezone), startAt: a.startAt, excludeAppointmentId: a.id, staff: true, durationOverride: Math.round((a.endAt.getTime() - a.startAt.getTime()) / 60_000) }, tx);
+          await tx.appointment.update({ where: { id: a.id }, data: { status: "CONFIRMED", cancelReason: null } });
+          await tx.appointmentStatusHistory.create({ data: { appointmentId: a.id, fromStatus: "CANCELLED", toStatus: "CONFIRMED", note: "Late payment received; slot still free" } });
+          revived = true;
+        } catch { /* slot gone */ }
       }
+      if (!revived) needsRefund = true;
     }
     await tx.auditLog.create({ data: { action: needsRefund ? "payment.captured_needs_refund" : "payment.captured", entity: "Payment", entityId: p.id, after: { orderId, paymentId, amountPaise: p.amountPaise } } });
 
@@ -104,7 +122,7 @@ export async function expireUnpaidBookings(holdMinutes = 15) {
   });
   for (const { id } of stale) {
     await prisma.$transaction([
-      prisma.appointment.updateMany({ where: { id, status: "PENDING" }, data: { status: "CANCELLED", cancelReason: "Online payment not completed in time" } }),
+      prisma.appointment.updateMany({ where: { id, status: "PENDING" }, data: { status: "CANCELLED", cancelReason: HOLD_EXPIRED } }),
       prisma.appointmentStatusHistory.create({ data: { appointmentId: id, fromStatus: "PENDING", toStatus: "CANCELLED", note: "Payment hold expired" } }),
       prisma.payment.updateMany({ where: { appointmentId: id, status: "CREATED" }, data: { status: "FAILED", failureReason: "Checkout not completed" } }),
     ]);

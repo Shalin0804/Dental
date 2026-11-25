@@ -40,7 +40,7 @@ On a deployed instance the passwords are whatever you set in `SEED_ADMIN_PASSWOR
 ## Tests
 
 ```bash
-npm test -w @sdc/backend        # 31 unit + integration tests (uses smile_dental_test DB)
+npm test -w @sdc/backend        # 36 unit + integration tests (uses smile_dental_test DB)
 npm run e2e -w @sdc/frontend    # Playwright: public site, booking, every dashboard page per role
 ```
 

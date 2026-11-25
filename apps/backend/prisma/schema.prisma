@@ -157,26 +157,27 @@ model RolePermission {
 }
 
 model User {
-  id            String         @id @default(cuid())
-  email         String         @unique
-  phone         String?
-  passwordHash  String
-  fullName      String
-  roleId        String
-  role          Role           @relation(fields: [roleId], references: [id])
-  isActive      Boolean        @default(true)
-  lastLoginAt   DateTime?
-  failedLogins  Int            @default(0)
-  lockedUntil   DateTime?
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
-  deletedAt     DateTime?
-  patient       Patient?
-  doctor        Doctor?
-  staff         Staff?
-  refreshTokens RefreshToken[]
-  auditLogs     AuditLog[]
-  notifications Notification[]
+  id                String         @id @default(cuid())
+  email             String         @unique
+  phone             String?
+  passwordHash      String
+  fullName          String
+  roleId            String
+  role              Role           @relation(fields: [roleId], references: [id])
+  isActive          Boolean        @default(true)
+  lastLoginAt       DateTime?
+  failedLogins      Int            @default(0)
+  lockedUntil       DateTime?
+  passwordChangedAt DateTime?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+  deletedAt         DateTime?
+  patient           Patient?
+  doctor            Doctor?
+  staff             Staff?
+  refreshTokens     RefreshToken[]
+  auditLogs         AuditLog[]
+  notifications     Notification[]
 
   @@index([roleId])
 }

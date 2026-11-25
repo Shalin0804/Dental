@@ -9,7 +9,7 @@ import { Card } from "@/components/ui/card";
 import { Field, Input, Select, Textarea } from "@/components/ui/input";
 import { EmptyState, Skeleton } from "@/components/ui/misc";
 import { useAuth } from "@/context/auth";
-import { api } from "@/services/api";
+import { api, setAccessToken } from "@/services/api";
 import type { Appointment, InvoiceRow, MedicalRecord, Patient, Payment, Prescription } from "@/types/api";
 import { formatINR } from "@/utils/format";
 import { fmtDate, fmtDateTime, fmtTime } from "@/utils/time";
@@ -179,7 +179,7 @@ function ProfileForm({ p }: { p: Patient }) {
   const save = useAction(() => send("/patients/me", "PATCH")({ ...f, gender: f.gender || null, allergies: f.allergies.split(",").map((s) => s.trim()).filter(Boolean), conditions: f.conditions.split(",").map((s) => s.trim()).filter(Boolean) }), { success: "Profile updated", invalidate: [["/patients/me"]] });
   const [pw, setPw] = useState({ currentPassword: "", newPassword: "" });
   const pwOk = passwordSchema.safeParse(pw.newPassword).success;
-  const changePw = useAction(() => send("/auth/change-password")(pw), { success: "Password changed. Other devices were signed out.", onSuccess: () => setPw({ currentPassword: "", newPassword: "" }) });
+  const changePw = useAction(() => (send("/auth/change-password")(pw) as Promise<{ data: { accessToken: string } }>).then((r) => setAccessToken(r.data.accessToken)), { success: "Password changed. Other devices were signed out.", onSuccess: () => setPw({ currentPassword: "", newPassword: "" }) });
   const v = (k: keyof typeof f) => ({ value: f[k], onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => setF({ ...f, [k]: e.target.value }) });
   return (
     <>

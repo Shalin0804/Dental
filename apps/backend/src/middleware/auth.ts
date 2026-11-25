@@ -29,8 +29,13 @@ export const signAccessToken = (userId: string, role: RoleName) =>
 async function resolve(header: string | undefined): Promise<AuthUser | null> {
   if (!header?.startsWith("Bearer ")) return null;
   try {
-    const p = jwt.verify(header.slice(7), env.JWT_ACCESS_SECRET, { algorithms: ["HS256"] }) as jwt.JwtPayload & { role: RoleName };
-    return { id: p.sub!, role: p.role, permissions: await rolePermissions(p.role) };
+    const p = jwt.verify(header.slice(7), env.JWT_ACCESS_SECRET, { algorithms: ["HS256"] }) as jwt.JwtPayload;
+    if (!p.sub || !p.iat) return null;
+    // DB check so deactivation, deletion, role changes and password changes apply immediately, not at token expiry.
+    const u = await prisma.user.findUnique({ where: { id: p.sub }, select: { isActive: true, deletedAt: true, passwordChangedAt: true, role: { select: { name: true } } } });
+    if (!u || !u.isActive || u.deletedAt) return null;
+    if (u.passwordChangedAt && p.iat * 1000 < u.passwordChangedAt.getTime() - 1000) return null;
+    return { id: p.sub, role: u.role.name, permissions: await rolePermissions(u.role.name) };
   } catch {
     return null;
   }

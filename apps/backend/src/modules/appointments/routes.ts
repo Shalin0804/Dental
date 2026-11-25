@@ -1,5 +1,5 @@
 import { Router, type Request } from "express";
-import rateLimit from "express-rate-limit";
+import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import { z } from "zod";
 import { APPOINTMENT_STATUSES, bookingSchema, patientDetailsSchema, type AppointmentStatus, type BookingResult } from "@sdc/shared";
 import { prisma, type Prisma, type Tx } from "../../config/db.js";
@@ -98,7 +98,13 @@ async function resolvePatient(tx: Tx, details: z.infer<typeof patientDetailsSche
 
 /* ------------------------------ Booking ------------------------------ */
 
-const bookingLimiter = rateLimit({ windowMs: 15 * 60_000, limit: 15, skip: (req) => env.NODE_ENV === "test" || !!req.user });
+// Staff are exempt; signed-in patients are limited per account, guests per IP.
+const bookingLimiter = rateLimit({
+  windowMs: 15 * 60_000, limit: 15,
+  skip: (req) => env.NODE_ENV === "test" || has(req, "appointments:manage"),
+  keyGenerator: (req) => (req.user ? `user:${req.user.id}` : ipKeyGenerator(req.ip ?? "")),
+});
+const MAX_ACTIVE_BOOKINGS = 3;
 
 appointmentsRouter.post("/", optionalAuth, bookingLimiter, async (req, res) => {
   const body = parse(bookingSchema, req.body);
@@ -122,6 +128,12 @@ appointmentsRouter.post("/", optionalAuth, bookingLimiter, async (req, res) => {
     else if (!staff && me.patientId) patientId = me.patientId;
     else if (body.patient) patientId = (await resolvePatient(tx, body.patient, staff)).id;
     else throw badRequest("Select or register a patient");
+
+    // Stops one person from holding many slots (pay-at-hospital bookings don't expire on their own).
+    if (!staff) {
+      const active = await tx.appointment.count({ where: { patientId, status: { in: ["PENDING", "CONFIRMED"] }, startAt: { gte: new Date() } } });
+      if (active >= MAX_ACTIVE_BOOKINGS) throw new HttpError(409, "TOO_MANY_BOOKINGS", `You already have ${active} upcoming appointments. Please call the hospital to book more.`);
+    }
 
     const status: AppointmentStatus = staff ? "CONFIRMED" : "PENDING";
     const a = await tx.appointment.create({

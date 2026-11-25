@@ -63,11 +63,10 @@ authRouter.post("/register", authLimiter, async (req, res) => {
 
   const user = await prisma.$transaction(async (tx) => {
     const u = await tx.user.create({ data: { email: body.email, phone: body.phone, fullName: body.fullName, passwordHash: hash, roleId: role.id }, include: { role: true } });
-    // Link an existing walk-in record (same phone, no account) instead of duplicating the patient.
-    const existing = await tx.patient.findFirst({ where: { phone: body.phone, userId: null, deletedAt: null } });
+    // Always a new record: linking an existing walk-in record by phone would let anyone who knows a
+    // patient's number claim their medical history. Front desk merges records after verifying identity.
     const data = { fullName: body.fullName, email: body.email, phone: body.phone, dateOfBirth: body.dateOfBirth ? new Date(body.dateOfBirth) : undefined, gender: body.gender, consentAt: new Date() };
-    if (existing) await tx.patient.update({ where: { id: existing.id }, data: { ...data, userId: u.id } });
-    else await tx.patient.create({ data: { ...data, userId: u.id, patientCode: patientCode(await nextSeq(tx, "patient")) } });
+    await tx.patient.create({ data: { ...data, userId: u.id, patientCode: patientCode(await nextSeq(tx, "patient")) } });
     return u;
   });
 
@@ -136,9 +135,11 @@ authRouter.post("/change-password", authenticate, async (req, res) => {
   if (!(await argon2.verify(user.passwordHash, body.currentPassword))) throw badRequest("Current password is incorrect");
   const hash = await argon2.hash(body.newPassword, { type: argon2.argon2id });
   await prisma.$transaction([
-    prisma.user.update({ where: { id: user.id }, data: { passwordHash: hash } }),
+    prisma.user.update({ where: { id: user.id }, data: { passwordHash: hash, passwordChangedAt: new Date() } }),
     prisma.refreshToken.updateMany({ where: { userId: user.id, revokedAt: null }, data: { revokedAt: new Date() } }),
   ]);
   await audit(req, "auth.change_password", "User", user.id);
-  res.status(204).end();
+  // Keep this device signed in with a fresh session; every other session was revoked above.
+  const { accessToken } = await issueSession(req, res, { id: user.id, role: { name: req.user!.role } });
+  res.json({ data: { accessToken } });
 });

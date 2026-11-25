@@ -25,6 +25,13 @@ export const filesRouter = Router();
 const optText = (max: number) => z.string().trim().max(max).nullish().transform((v) => v || null);
 const optDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish().or(z.literal("")).transform((v) => (v ? new Date(`${v}T00:00:00Z`) : null));
 
+/** Linked appointment / medical record must belong to the same (live) patient. */
+async function assertLinks(patientId: string, links: { appointmentId?: string | null; medicalRecordId?: string | null }) {
+  if (!(await prisma.patient.findFirst({ where: { id: patientId, deletedAt: null }, select: { id: true } }))) throw notFound("Patient");
+  if (links.appointmentId && !(await prisma.appointment.findFirst({ where: { id: links.appointmentId, patientId }, select: { id: true } }))) throw badRequest("Appointment does not belong to this patient");
+  if (links.medicalRecordId && !(await prisma.medicalRecord.findFirst({ where: { id: links.medicalRecordId, patientId }, select: { id: true } }))) throw badRequest("Medical record does not belong to this patient");
+}
+
 async function myDoctorId(req: Request) {
   const me = await actor(req);
   if (!me.doctorId) throw forbidden("Only doctors can write clinical records");
@@ -84,6 +91,7 @@ recordsRouter.post("/", authorize("clinical:write"), async (req, res) => {
   const doctorId = await myDoctorId(req);
   const { examination, ...body } = parse(recordSchema, req.body);
   await assertPatientAccess(req, body.patientId);
+  await assertLinks(body.patientId, body);
   const r = await prisma.medicalRecord.create({
     data: { ...body, appointmentId: body.appointmentId ?? null, doctorId, ...(examination ? { examination: { create: examination } } : {}) },
     include: recordInclude,
@@ -98,6 +106,7 @@ recordsRouter.patch("/:id", authorize("clinical:write"), async (req, res) => {
   if (!before) throw notFound("Medical record");
   if (before.doctorId !== doctorId) throw forbidden("Only the treating doctor can edit this record");
   const { examination, patientId: _p, ...body } = parse(recordSchema.partial(), req.body);
+  await assertLinks(before.patientId, body);
   const r = await prisma.medicalRecord.update({
     where: { id: before.id },
     data: { ...body, ...(examination ? { examination: { upsert: { create: examination, update: examination } } } : {}) },
@@ -142,6 +151,7 @@ filesRouter.post("/", authorize("clinical:write", "patients:write"), upload.sing
   try {
     const body = parse(z.object({ patientId: z.string().min(1), medicalRecordId: z.string().optional(), kind: z.enum(["XRAY", "REPORT", "PHOTO", "DOCUMENT"]) }), req.body);
     await assertPatientAccess(req, body.patientId);
+    await assertLinks(body.patientId, body);
     if (!(await sniff(file.path, file.mimetype))) throw new HttpError(415, "UNSUPPORTED_FILE", "File content does not match its type");
     const f = await prisma.uploadedFile.create({
       data: { uploadedById: req.user!.id, patientId: body.patientId, medicalRecordId: body.medicalRecordId ?? null, kind: body.kind, storageKey: file.filename, originalName: file.originalname.slice(0, 200), mimeType: file.mimetype, sizeBytes: file.size },
@@ -161,10 +171,10 @@ filesRouter.get("/", authorize("clinical:read", "self:read"), async (req, res) =
 });
 
 /** Streams a file after an access check — uploads are never served statically. */
-filesRouter.get("/:id/content", authorize("clinical:read", "self:read", "patients:write"), async (req, res) => {
+filesRouter.get("/:id/content", authorize("clinical:read", "self:read"), async (req, res) => {
   const f = await prisma.uploadedFile.findFirst({ where: { id: String(req.params.id), deletedAt: null } });
   if (!f || !f.patientId) throw notFound("File");
-  if (!has(req, "patients:write")) await assertClinicalRead(req, f.patientId);
+  await assertClinicalRead(req, f.patientId);
   await audit(req, "file.view", "UploadedFile", f.id);
   res.setHeader("Content-Type", f.mimeType);
   res.setHeader("Content-Disposition", `inline; filename="${f.originalName.replace(/[^\w.-]/g, "_")}"`);
@@ -244,6 +254,7 @@ prescriptionsRouter.post("/", authorize("clinical:write"), async (req, res) => {
   const doctorId = await myDoctorId(req);
   const { items, finalize, ...body } = parse(rxSchema, req.body);
   await assertPatientAccess(req, body.patientId);
+  await assertLinks(body.patientId, body);
   const rx = await prisma.$transaction(async (tx) => {
     const yy = String(new Date().getFullYear()).slice(2);
     const r = await tx.prescription.create({

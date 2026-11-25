@@ -269,7 +269,7 @@ export function PatientChartPage({ base }: { base: string }) {
   const { user, can } = useAuth();
   const p = useGet<Patient>(`/patients/${id}`);
   const s = useGet<Summary>(`/patients/${id}/summary`);
-  const files = useGet<UploadedFile[]>(can("clinical:read") || can("patients:write") ? "/files" : null, { patientId: id });
+  const files = useGet<UploadedFile[]>(can("clinical:read") ? "/files" : null, { patientId: id });
   const [tab, setTab] = useState<"overview" | "records" | "prescriptions" | "files" | "appointments" | "billing">("overview");
   const [rec, setRec] = useState<{ open: boolean; r?: MedicalRecord }>({ open: false });
   const [rx, setRx] = useState<{ open: boolean; rx?: Prescription }>({ open: false });
@@ -295,7 +295,7 @@ export function PatientChartPage({ base }: { base: string }) {
       {tab === "overview" && <ProfileTab p={pt} />}
       {tab === "records" && <div className="space-y-4">{s.data?.records.length ? s.data.records.map((r) => <RecordCard key={r.id} r={r} onEdit={isDoctor && r.doctor.id === user?.doctorId ? () => setRec({ open: true, r }) : undefined} />) : <EmptyState>No clinical records yet.</EmptyState>}</div>}
       {tab === "prescriptions" && <div className="space-y-4">{s.data?.prescriptions.length ? s.data.prescriptions.map((r) => <PrescriptionCard key={r.id} rx={r} onEdit={isDoctor && r.doctorId === user?.doctorId ? () => setRx({ open: true, rx: r }) : undefined} />) : <EmptyState>No prescriptions yet.</EmptyState>}</div>}
-      {tab === "files" && <FilesTab patientId={id} files={files.data ?? []} canUpload={can("clinical:write") || can("patients:write")} />}
+      {tab === "files" && <FilesTab patientId={id} files={files.data ?? []} canUpload={can("clinical:write")} />}
       {tab === "appointments" && (
         <Card className="divide-y divide-line">{s.data?.appointments.length ? s.data.appointments.map((a) => (
           <div key={a.id} className="flex flex-wrap items-center justify-between gap-2 px-5 py-3 text-sm"><span><b>{fmtDateTime(a.startAt)}</b> · {a.treatment.name} · {a.doctor.user.fullName}</span><StatusBadge status={a.status} /></div>

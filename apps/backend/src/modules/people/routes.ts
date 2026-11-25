@@ -116,12 +116,14 @@ patientsRouter.patch("/:id", authorize("patients:write", "clinical:write"), asyn
 patientsRouter.get("/:id/summary", authorize("patients:read", "self:read"), async (req, res) => {
   const id = String(req.params.id);
   await assertPatientAccess(req, id);
-  const [appointments, invoices, prescriptions, records] = await Promise.all([
-    prisma.appointment.findMany({ where: { patientId: id }, orderBy: { startAt: "desc" }, take: 50, include: { doctor: { select: { user: { select: { fullName: true } } } }, treatment: { select: { name: true } } } }),
-    has(req, "billing:read") || (await actor(req)).patientId === id ? prisma.invoice.findMany({ where: { patientId: id }, orderBy: { issuedAt: "desc" }, take: 50 }) : Promise.resolve([]),
-    prisma.prescription.findMany({ where: { patientId: id, ...((await actor(req)).patientId === id ? { status: "FINAL" as const } : {}) }, orderBy: { createdAt: "desc" }, take: 50, include: { doctor: { select: { user: { select: { fullName: true } } } }, items: true } }),
-    has(req, "clinical:read") || (await actor(req)).patientId === id ? prisma.medicalRecord.findMany({ where: { patientId: id }, orderBy: { createdAt: "desc" }, take: 50, include: { doctor: { select: { user: { select: { fullName: true } } } }, examination: true, files: { where: { deletedAt: null } } } }) : Promise.resolve([]),
-  ]);
+  const own = (await actor(req)).patientId === id;
+  const clinical = has(req, "clinical:read") || own;
+  const doctor = { select: { user: { select: { fullName: true } } } };
+  const appointments = await prisma.appointment.findMany({ where: { patientId: id }, orderBy: { startAt: "desc" }, take: 50, include: { doctor, treatment: { select: { name: true } } } });
+  const invoices = has(req, "billing:read") || own ? await prisma.invoice.findMany({ where: { patientId: id }, orderBy: { issuedAt: "desc" }, take: 50 }) : [];
+  // Clinical data (diagnoses, medication, notes) only for clinicians and the patient — not front desk.
+  const prescriptions = clinical ? await prisma.prescription.findMany({ where: { patientId: id, ...(own ? { status: "FINAL" as const } : {}) }, orderBy: { createdAt: "desc" }, take: 50, include: { doctor, items: true } }) : [];
+  const records = clinical ? await prisma.medicalRecord.findMany({ where: { patientId: id }, orderBy: { createdAt: "desc" }, take: 50, include: { doctor, examination: true, files: { where: { deletedAt: null } } } }) : [];
   res.json({ data: { appointments, invoices, prescriptions, records } });
 });
 
@@ -175,7 +177,7 @@ staffRouter.patch("/:id", async (req, res) => {
   const { designation, password, ...rest } = body;
   const u = await prisma.user.update({
     where: { id: target.id },
-    data: { ...rest, ...(password ? { passwordHash: await argon2.hash(password, { type: argon2.argon2id }) } : {}), ...(designation ? { staff: { upsert: { create: { designation }, update: { designation } } } } : {}) },
+    data: { ...rest, ...(password ? { passwordHash: await argon2.hash(password, { type: argon2.argon2id }), passwordChangedAt: new Date() } : {}), ...(designation ? { staff: { upsert: { create: { designation }, update: { designation } } } } : {}) },
     select: { id: true, email: true, fullName: true, isActive: true },
   });
   if (body.isActive === false || password) await prisma.refreshToken.updateMany({ where: { userId: u.id, revokedAt: null }, data: { revokedAt: new Date() } });

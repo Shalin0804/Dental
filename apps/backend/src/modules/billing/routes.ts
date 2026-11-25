@@ -5,7 +5,7 @@ import { authenticate, authorize, has } from "../../middleware/auth.js";
 import { actor } from "../../services/actor.js";
 import { audit } from "../../services/audit.js";
 import { getSettings } from "../../services/availability.js";
-import { computeTotals, createInvoice, syncInvoice } from "../../services/billing.js";
+import { computeTotals, createInvoice, lockKey, syncInvoice } from "../../services/billing.js";
 import { notifyPatient } from "../../services/notify.js";
 import { kv, rupees, sendPdf, table } from "../../services/pdf.js";
 import { createOrder, keyId, refundPayment } from "../../services/razorpay.js";
@@ -76,27 +76,35 @@ invoicesRouter.get("/:id", authorize("billing:read", "self:read"), async (req, r
 
 invoicesRouter.post("/:id/void", authorize("billing:manage"), async (req, res) => {
   const { reason } = parse(z.object({ reason: z.string().trim().min(3).max(300) }), req.body);
-  const inv = await loadInvoice(req, String(req.params.id));
-  if (inv.paidPaise - inv.refundedPaise > 0) throw conflict("Refund all payments before voiding this invoice");
-  const u = await prisma.invoice.update({ where: { id: inv.id }, data: { status: "VOID", notes: [inv.notes, `VOID: ${reason}`].filter(Boolean).join("\n") } });
-  await audit(req, "invoice.void", "Invoice", inv.id, { status: inv.status }, { status: "VOID", reason });
+  const id = (await loadInvoice(req, String(req.params.id))).id;
+  const u = await prisma.$transaction(async (tx) => {
+    await lockKey(tx, `invoice:${id}`);
+    const inv = await tx.invoice.findUniqueOrThrow({ where: { id } });
+    if (inv.paidPaise - inv.refundedPaise > 0) throw conflict("Refund all payments before voiding this invoice");
+    // Abandon any open online orders so they can't be captured onto a void invoice.
+    await tx.payment.updateMany({ where: { invoiceId: id, status: "CREATED" }, data: { status: "FAILED", failureReason: "Invoice voided" } });
+    return tx.invoice.update({ where: { id }, data: { status: "VOID", notes: [inv.notes, `VOID: ${reason}`].filter(Boolean).join("\n") } });
+  });
+  await audit(req, "invoice.void", "Invoice", id, undefined, { status: "VOID", reason });
   res.json({ data: u });
 });
 
 /** Record a payment received at the desk (cash/card/UPI/bank). Partial payments allowed. */
 invoicesRouter.post("/:id/payments", authorize("billing:manage"), async (req, res) => {
   const body = parse(z.object({ amountPaise: z.coerce.number().int().min(1), method: z.enum(["CASH", "CARD", "UPI", "BANK_TRANSFER"]), reference: z.string().trim().max(100).nullish() }), req.body);
-  const inv = await loadInvoice(req, String(req.params.id));
-  if (inv.status === "VOID") throw conflict("Invoice is void");
-  const due = inv.totalPaise - (inv.paidPaise - inv.refundedPaise);
-  if (body.amountPaise > due) throw badRequest(`Amount exceeds the balance due (${rupees(due)})`);
+  const { id, number, patient } = await loadInvoice(req, String(req.params.id));
   const pay = await prisma.$transaction(async (tx) => {
-    const p = await tx.payment.create({ data: { patientId: inv.patientId, invoiceId: inv.id, appointmentId: null, amountPaise: body.amountPaise, method: body.method, reference: body.reference ?? null, status: "CAPTURED", paidAt: new Date(), receivedById: req.user!.id } });
-    await syncInvoice(tx, inv.id);
-    await notifyPatient(inv.patient, "payment_receipt", { name: inv.patient.fullName, amount: rupees(body.amountPaise), invoice: inv.number }, tx);
+    await lockKey(tx, `invoice:${id}`); // balance check and insert are atomic per invoice
+    const inv = await tx.invoice.findUniqueOrThrow({ where: { id } });
+    if (inv.status === "VOID") throw conflict("Invoice is void");
+    const due = inv.totalPaise - (inv.paidPaise - inv.refundedPaise);
+    if (body.amountPaise > due) throw badRequest(`Amount exceeds the balance due (${rupees(due)})`);
+    const p = await tx.payment.create({ data: { patientId: inv.patientId, invoiceId: id, amountPaise: body.amountPaise, method: body.method, reference: body.reference ?? null, status: "CAPTURED", paidAt: new Date(), receivedById: req.user!.id } });
+    await syncInvoice(tx, id);
+    await notifyPatient(patient, "payment_receipt", { name: patient.fullName, amount: rupees(body.amountPaise), invoice: number }, tx);
     return p;
   });
-  await audit(req, "payment.record", "Payment", pay.id, undefined, { invoice: inv.number, amountPaise: pay.amountPaise, method: pay.method });
+  await audit(req, "payment.record", "Payment", pay.id, undefined, { invoice: number, amountPaise: pay.amountPaise, method: pay.method });
   res.status(201).json({ data: pay });
 });
 
@@ -105,9 +113,19 @@ invoicesRouter.post("/:id/pay-online", authorize("self:read", "billing:manage"),
   const inv = await loadInvoice(req, String(req.params.id));
   const due = inv.totalPaise - (inv.paidPaise - inv.refundedPaise);
   if (inv.status === "VOID" || due <= 0) throw conflict("Nothing is due on this invoice");
-  const order = await createOrder(due, inv.number, { invoiceId: inv.id });
-  await prisma.payment.create({ data: { patientId: inv.patientId, invoiceId: inv.id, amountPaise: due, method: "RAZORPAY", status: "CREATED", razorpayOrderId: order.id } });
-  res.json({ data: { orderId: order.id, amountPaise: due, keyId: keyId(), currency: "INR", name: inv.patient.fullName, email: inv.patient.email, phone: inv.patient.phone } });
+  // Reuse the open order for the same amount instead of creating parallel payable orders.
+  const open = await prisma.payment.findFirst({ where: { invoiceId: inv.id, status: "CREATED", method: "RAZORPAY", amountPaise: due, createdAt: { gt: new Date(Date.now() - 30 * 60_000) } } });
+  let orderId = open?.razorpayOrderId ?? null;
+  if (!orderId) {
+    const order = await createOrder(due, inv.number, { invoiceId: inv.id });
+    orderId = order.id;
+    await prisma.$transaction(async (tx) => {
+      await lockKey(tx, `invoice:${inv.id}`);
+      await tx.payment.updateMany({ where: { invoiceId: inv.id, status: "CREATED" }, data: { status: "FAILED", failureReason: "Superseded by a newer checkout" } });
+      await tx.payment.create({ data: { patientId: inv.patientId, invoiceId: inv.id, amountPaise: due, method: "RAZORPAY", status: "CREATED", razorpayOrderId: order.id } });
+    });
+  }
+  res.json({ data: { orderId, amountPaise: due, keyId: keyId(), currency: "INR", name: inv.patient.fullName, email: inv.patient.email, phone: inv.patient.phone } });
 });
 
 invoicesRouter.get("/:id/pdf", authorize("billing:read", "self:read"), async (req, res) => {
@@ -161,27 +179,40 @@ paymentsRouter.get("/", authorize("billing:read", "self:read"), async (req, res)
 
 paymentsRouter.post("/:id/refunds", authorize("billing:manage"), async (req, res) => {
   const body = parse(z.object({ amountPaise: z.coerce.number().int().min(1), reason: z.string().trim().min(3).max(300) }), req.body);
-  const p = await prisma.payment.findUnique({ where: { id: String(req.params.id) }, include: { refunds: true } });
-  if (!p) throw notFound("Payment");
-  if (!["CAPTURED", "PARTIALLY_REFUNDED"].includes(p.status)) throw conflict("Only captured payments can be refunded");
-  const already = p.refunds.filter((r) => r.status !== "FAILED").reduce((s, r) => s + r.amountPaise, 0);
-  if (body.amountPaise > p.amountPaise - already) throw badRequest(`Maximum refundable is ${rupees(p.amountPaise - already)}`);
+  const id = String(req.params.id);
 
-  let razorpayRefundId: string | null = null;
-  let status: "PENDING" | "PROCESSED" = "PROCESSED"; // cash/card/UPI refunds are handed back at the desk
-  if (p.method === "RAZORPAY") {
-    if (!p.razorpayPaymentId) throw conflict("Payment has no Razorpay id");
-    const r = await refundPayment(p.razorpayPaymentId, body.amountPaise, { reason: body.reason.slice(0, 200) });
-    razorpayRefundId = r.id;
-    status = r.status === "processed" ? "PROCESSED" : "PENDING"; // final state arrives via refund.processed webhook
-  }
-  const refund = await prisma.$transaction(async (tx) => {
-    const r = await tx.refund.create({ data: { paymentId: p.id, amountPaise: body.amountPaise, reason: body.reason, status, razorpayRefundId, createdById: req.user!.id } });
+  // 1) Reserve the refund under a per-payment lock so concurrent requests can't exceed the paid amount.
+  const { refund, p } = await prisma.$transaction(async (tx) => {
+    await lockKey(tx, `payment:${id}`);
+    const p = await tx.payment.findUnique({ where: { id }, include: { refunds: true } });
+    if (!p) throw notFound("Payment");
+    if (!["CAPTURED", "PARTIALLY_REFUNDED"].includes(p.status)) throw conflict("Only captured payments can be refunded");
+    const already = p.refunds.filter((r) => r.status !== "FAILED").reduce((s, r) => s + r.amountPaise, 0);
+    if (body.amountPaise > p.amountPaise - already) throw badRequest(`Maximum refundable is ${rupees(p.amountPaise - already)}`);
+    const refund = await tx.refund.create({ data: { paymentId: p.id, amountPaise: body.amountPaise, reason: body.reason, status: p.method === "RAZORPAY" ? "PENDING" : "PROCESSED", createdById: req.user!.id } });
     await tx.payment.update({ where: { id: p.id }, data: { status: already + body.amountPaise >= p.amountPaise ? "REFUNDED" : "PARTIALLY_REFUNDED" } });
     if (p.invoiceId) await syncInvoice(tx, p.invoiceId);
-    return r;
+    return { refund, p };
   });
-  await audit(req, "refund.create", "Refund", refund.id, undefined, { paymentId: p.id, amountPaise: body.amountPaise, reason: body.reason });
-  res.status(201).json({ data: refund });
-});
 
+  // 2) Gateway call outside the transaction; on failure release the reservation.
+  let final = refund;
+  if (p.method === "RAZORPAY") {
+    try {
+      if (!p.razorpayPaymentId) throw conflict("Payment has no Razorpay id");
+      const r = await refundPayment(p.razorpayPaymentId, body.amountPaise, { reason: body.reason.slice(0, 200), refundId: refund.id });
+      final = await prisma.refund.update({ where: { id: refund.id }, data: { razorpayRefundId: r.id, status: r.status === "processed" ? "PROCESSED" : "PENDING" } });
+    } catch (err) {
+      await prisma.$transaction(async (tx) => {
+        await lockKey(tx, `payment:${id}`);
+        await tx.refund.update({ where: { id: refund.id }, data: { status: "FAILED" } });
+        const rest = await tx.refund.aggregate({ where: { paymentId: id, status: { not: "FAILED" } }, _sum: { amountPaise: true } });
+        await tx.payment.update({ where: { id }, data: { status: (rest._sum.amountPaise ?? 0) > 0 ? "PARTIALLY_REFUNDED" : "CAPTURED" } });
+        if (p.invoiceId) await syncInvoice(tx, p.invoiceId);
+      });
+      throw err;
+    }
+  }
+  await audit(req, "refund.create", "Refund", final.id, undefined, { paymentId: p.id, amountPaise: body.amountPaise, reason: body.reason, status: final.status });
+  res.status(201).json({ data: final });
+});

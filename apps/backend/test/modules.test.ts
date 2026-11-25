@@ -161,3 +161,56 @@ describe("phase 5: dashboards use real data", () => {
     expect((await http().get("/api/reports/admin").set(bearer(t))).status).toBe(403);
   });
 });
+
+describe("security review regressions", () => {
+  it("deactivated staff lose API access immediately, not at token expiry", async () => {
+    const admin = await login("manager@smiledental.example");
+    const c = await http().post("/api/staff").set(bearer(admin)).send({ fullName: "Temp Desk", email: "temp.desk@smiledental.example", password: "Desk@12345", role: "RECEPTIONIST", designation: "Front desk" });
+    const t = await login("temp.desk@smiledental.example", "Desk@12345");
+    expect((await http().get("/api/patients").set(bearer(t))).status).toBe(200);
+    await http().patch(`/api/staff/${c.body.data.id}`).set(bearer(admin)).send({ isActive: false });
+    expect((await http().get("/api/patients").set(bearer(t))).status).toBe(401);
+  });
+
+  it("registering with a walk-in's phone does not grant access to their record", async () => {
+    const rt = await login("reception@smiledental.example");
+    const walkIn = await http().post("/api/patients").set(bearer(rt)).send({ fullName: "Private Walkin", phone: "9123400001" });
+    const reg = await http().post("/api/auth/register").send({ fullName: "Attacker", email: "attacker@example.com", phone: "9123400001", password: "Attack123", consent: true });
+    expect(reg.status).toBe(201);
+    expect(reg.body.data.user.patientId).not.toBe(walkIn.body.data.id);
+    expect((await http().get(`/api/patients/${walkIn.body.data.id}`).set(bearer(reg.body.data.accessToken))).status).toBe(403);
+  });
+
+  it("front desk cannot read prescriptions or clinical files", async () => {
+    const rt = await login("reception@smiledental.example");
+    const me = await prisma.patient.findFirstOrThrow({ where: { user: { email: "patient@smiledental.example" } } });
+    const s = await http().get(`/api/patients/${me.id}/summary`).set(bearer(rt));
+    expect(s.body.data.prescriptions).toEqual([]);
+    expect(s.body.data.records).toEqual([]);
+    const f = await prisma.uploadedFile.create({ data: { uploadedById: (await prisma.user.findFirstOrThrow()).id, patientId: me.id, kind: "XRAY", storageKey: "nonexistent.png", originalName: "x.png", mimeType: "image/png", sizeBytes: 1 } });
+    expect((await http().get(`/api/files/${f.id}/content`).set(bearer(rt))).status).toBe(403);
+  });
+
+  it("concurrent desk payments cannot overpay an invoice", async () => {
+    const rt = await login("reception@smiledental.example");
+    const p = await http().post("/api/patients").set(bearer(rt)).send(guest("Race Payer"));
+    const inv = await http().post("/api/invoices").set(bearer(rt)).send({ patientId: p.body.data.id, items: [{ description: "Cleaning", quantity: 1, unitPricePaise: 100000 }] });
+    const results = await Promise.all(Array.from({ length: 5 }, () => http().post(`/api/invoices/${inv.body.data.id}/payments`).set(bearer(rt)).send({ amountPaise: 100000, method: "CASH" })));
+    expect(results.filter((r) => r.status === 201)).toHaveLength(1);
+    expect((await prisma.invoice.findUniqueOrThrow({ where: { id: inv.body.data.id } })).paidPaise).toBe(100000);
+  });
+
+  it("patients cannot hold more than 3 upcoming bookings", async () => {
+    const f = await fixtures();
+    const reg = await http().post("/api/auth/register").send({ fullName: "Slot Hoarder", email: "hoarder@example.com", phone: "9123400002", password: "Hoard1234", consent: true });
+    const t = reg.body.data.accessToken;
+    const day = "2031-03-03"; // a Monday; widen the booking window to reach it
+    await prisma.hospitalSettings.update({ where: { id: "default" }, data: { bookingWindowDays: 3650 } });
+    const slots = (await http().get("/api/availability").query({ doctorId: f.other.id, treatmentId: f.general.id, date: day })).body.data.slots as string[];
+    const codes: number[] = [];
+    for (const s of [slots[0], slots[4], slots[8], slots[12]]) // 1h apart: clear of the doctor's buffer
+      codes.push((await http().post("/api/appointments").set(bearer(t)).send({ treatmentId: f.general.id, doctorId: f.other.id, startAt: s })).status);
+    expect(codes).toEqual([201, 201, 201, 409]);
+    await prisma.hospitalSettings.update({ where: { id: "default" }, data: { bookingWindowDays: 60 } });
+  });
+});

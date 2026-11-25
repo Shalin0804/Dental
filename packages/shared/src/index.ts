@@ -106,3 +106,43 @@ export interface SiteContent {
 }
 
 export interface ApiError { error: { code: string; message: string; details?: unknown } }
+
+/* ---------- Booking ---------- */
+
+export const patientDetailsSchema = z.object({
+  fullName: z.string().trim().min(2, "Enter the patient's full name").max(100),
+  phone: phoneSchema,
+  email: emailSchema.optional().or(z.literal("")),
+  dateOfBirth: z.string().date().optional().or(z.literal("")),
+  gender: z.enum(["MALE", "FEMALE", "OTHER"]).optional(),
+});
+export type PatientDetails = z.infer<typeof patientDetailsSchema>;
+
+export const PAYMENT_CHOICES = ["PAY_AT_HOSPITAL", "RAZORPAY"] as const;
+
+export const bookingSchema = z.object({
+  treatmentId: z.string().min(1, "Select a treatment"),
+  doctorId: z.string().min(1, "Select a doctor"),
+  startAt: z.string().datetime({ message: "Select a time slot" }),
+  paymentMethod: z.enum(PAYMENT_CHOICES).default("PAY_AT_HOSPITAL"),
+  notes: z.string().trim().max(500).optional(),
+  patient: patientDetailsSchema.optional(),
+  consent: z.boolean().optional(),
+  // Staff-only fields (ignored for patients/guests)
+  patientId: z.string().optional(),
+  source: z.enum(["ONLINE", "PHONE", "WALK_IN"]).optional(),
+  durationOverride: z.coerce.number().int().min(5).max(480).optional(),
+});
+export type BookingInput = z.infer<typeof bookingSchema>;
+
+export interface Slot { startAt: string }
+export interface AvailabilityResponse { duration: number; slots: string[]; reason: string | null; timezone: string }
+
+export interface BookingResult {
+  id: string;
+  reference: string;
+  status: AppointmentStatus;
+  startAt: string;
+  endAt: string;
+  payment: null | { orderId: string; amountPaise: number; keyId: string; currency: "INR"; name: string; email: string | null; phone: string };
+}

@@ -1,5 +1,7 @@
 import type { Router } from "express";
+import { appointmentsRouter, availabilityRouter } from "./appointments/routes.js";
 
 export function mountModules(api: Router) {
-  void api;
+  api.use("/availability", availabilityRouter);
+  api.use("/appointments", appointmentsRouter);
 }
